@@ -1,0 +1,32 @@
+name: Descobrir chat ID
+
+# Rode manualmente depois que a pessoa mandar /start para o bot.
+on:
+  workflow_dispatch:
+
+jobs:
+  descobrir:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Listar quem falou com o bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" \
+            | python3 -c '
+          import json, sys
+          dados = json.load(sys.stdin)
+          if not dados.get("ok"):
+              sys.exit(f"Erro do Telegram: {dados}")
+          vistos = {}
+          for u in dados.get("result", []):
+              msg = u.get("message") or u.get("my_chat_member") or {}
+              chat = msg.get("chat") or {}
+              if chat.get("id") is not None:
+                  nome = " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])) or chat.get("title", "")
+                  vistos[chat["id"]] = (nome, chat.get("username", ""))
+          if not vistos:
+              print("Ninguém mandou mensagem ao bot nas últimas 24h. Peça para mandar /start e rode de novo.")
+          for cid, (nome, user) in vistos.items():
+              print(f"CHAT_ID={cid}  nome={nome}  username=@{user}")
+          '

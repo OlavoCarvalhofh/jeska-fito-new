@@ -1,0 +1,47 @@
+name: Enviar resumo no Telegram
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "resumos/**.md"
+  workflow_dispatch:
+    inputs:
+      arquivo:
+        description: "Arquivo a enviar (ex.: exemplos/2026-11-exemplo.md)"
+        required: true
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Escolher arquivos
+        id: arquivos
+        env:
+          ARQUIVO_MANUAL: ${{ github.event.inputs.arquivo }}
+        run: |
+          if [ -n "$ARQUIVO_MANUAL" ]; then
+            if [ ! -f "$ARQUIVO_MANUAL" ]; then echo "Arquivo não encontrado: $ARQUIVO_MANUAL"; exit 1; fi
+            printf '%s\n' "$ARQUIVO_MANUAL" > lista.txt
+          else
+            git diff --name-only --diff-filter=AM HEAD~1 HEAD -- 'resumos/*.md' > lista.txt || true
+          fi
+          echo "Arquivos:"; cat lista.txt
+
+      - name: Enviar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
+        run: |
+          while IFS= read -r arq; do
+            [ -z "$arq" ] && continue
+            python scripts/enviar_telegram.py "$arq"
+          done < lista.txt
