@@ -12,6 +12,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
+          echo "Bot do token:"
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("BOT=@" + d["result"]["username"] if d.get("ok") else "TOKEN INVALIDO: " + str(d))'
           curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" \
             | python3 -c '
           import json, sys
