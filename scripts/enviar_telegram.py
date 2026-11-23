@@ -20,31 +20,76 @@ import urllib.request
 LIMITE = 3900  # Telegram aceita até 4096 caracteres por mensagem
 
 LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
-NEGRITO_RE = re.compile(r"\*\*(.+?)\*\*")
-ITALICO_RE = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])")
 CODIGO_RE = re.compile(r"`([^`]+)`")
+TAG = {1: "i", 2: "b"}
+
+
+def enfatizar(texto: str) -> str:
+    """Converte *itálico*, **negrito** e ***ambos*** em HTML sempre bem
+    aninhado. Asteriscos que não fecham voltam a ser texto."""
+    saida: list[str] = []
+    pilha: list[tuple[int, int]] = []  # (tamanho do marcador, posição em saida)
+    i, n = 0, len(texto)
+    while i < n:
+        if texto[i] != "*":
+            j = i
+            while j < n and texto[j] != "*":
+                j += 1
+            saida.append(texto[i:j])
+            i = j
+            continue
+        j = i
+        while j < n and texto[j] == "*":
+            j += 1
+        resto = j - i
+        antes = texto[i - 1] if i > 0 else " "
+        depois = texto[j] if j < n else " "
+        # fechar marcadores abertos, sempre do topo da pilha
+        while resto and pilha and not antes.isspace() and pilha[-1][0] <= resto:
+            tam, _ = pilha.pop()
+            saida.append(f"</{TAG[tam]}>")
+            resto -= tam
+        # abrir novos marcadores
+        if resto and not depois.isspace():
+            if resto >= 2:
+                pilha.append((2, len(saida)))
+                saida.append("<b>")
+                resto -= 2
+            if resto >= 1:
+                pilha.append((1, len(saida)))
+                saida.append("<i>")
+                resto -= 1
+        if resto:
+            saida.append("*" * resto)
+        i = j
+    for tam, pos in pilha:  # não fechados: viram asteriscos de novo
+        saida[pos] = "*" * tam
+    return "".join(saida)
 
 
 def formatar_inline(texto: str) -> str:
     """Converte Markdown simples de uma linha em HTML aceito pelo Telegram."""
-    links = []
+    guardados = []
+
+    def guardar(html_pronto: str) -> str:
+        guardados.append(html_pronto)
+        return f"\x00{len(guardados) - 1}\x00"
 
     def guardar_link(m):
-        links.append((m.group(1), m.group(2)))
-        return f"\x00{len(links) - 1}\x00"
+        rotulo = m.group(1).replace("*", "")
+        return guardar(f'<a href="{html.escape(m.group(2))}">{html.escape(rotulo, quote=False)}</a>')
 
     texto = LINK_RE.sub(guardar_link, texto)
-    texto = html.escape(texto, quote=False)
-    texto = CODIGO_RE.sub(r"<code>\1</code>", texto)
-    texto = NEGRITO_RE.sub(r"<b>\1</b>", texto)
-    texto = ITALICO_RE.sub(r"<i>\1</i>", texto)
+    texto = CODIGO_RE.sub(lambda m: guardar(f"<code>{html.escape(m.group(1), quote=False)}</code>"), texto)
+    texto = enfatizar(html.escape(texto, quote=False))
+    return re.sub(r"\x00(\d+)\x00", lambda m: guardados[int(m.group(1))], texto)
 
-    def restaurar_link(m):
-        rotulo, url = links[int(m.group(1))]
-        rotulo = NEGRITO_RE.sub(r"\1", rotulo)
-        return f'<a href="{html.escape(url)}">{html.escape(rotulo, quote=False)}</a>'
 
-    return re.sub(r"\x00(\d+)\x00", restaurar_link, texto)
+def sem_formatacao(texto_html: str) -> str:
+    """Versão em texto puro, usada se o Telegram recusar o HTML."""
+    texto = re.sub(r'<a href="([^"]+)">([^<]*)</a>', r"\2 (\1)", texto_html)
+    texto = re.sub(r"</?(b|i|code)>", "", texto)
+    return html.unescape(texto)
 
 
 def markdown_para_html(md: str) -> list[str]:
@@ -95,12 +140,25 @@ def dividir(linhas: list[str]) -> list[str]:
 
 
 def enviar(token: str, chat_id: str, texto: str) -> None:
-    dados = urllib.parse.urlencode({
+    """Envia em HTML; se o Telegram recusar a formatação, reenvia em texto puro."""
+    try:
+        _enviar(token, chat_id, texto, html_mode=True)
+    except RuntimeError as erro:
+        if "can't parse entities" not in str(erro):
+            raise
+        print(f"Formatação recusada ({erro}); reenviando em texto puro.")
+        _enviar(token, chat_id, sem_formatacao(texto), html_mode=False)
+
+
+def _enviar(token: str, chat_id: str, texto: str, html_mode: bool) -> None:
+    campos = {
         "chat_id": chat_id,
         "text": texto,
-        "parse_mode": "HTML",
         "disable_web_page_preview": "true",
-    }).encode()
+    }
+    if html_mode:
+        campos["parse_mode"] = "HTML"
+    dados = urllib.parse.urlencode(campos).encode()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     for tentativa in range(3):
         try:
